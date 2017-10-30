@@ -1603,6 +1603,28 @@ class DefaultObjectTransformer(object):
         def __init__(self, *args, **kwargs):
             list.__init__(self, *args, **kwargs)
             JavaObject.__init__(self)
+            self.size = None
+
+        @staticmethod
+        def is_custom():
+            """
+            Indicates if the object serialization is customized, in which case,
+            this instance must implement read() and write()
+
+            :return: A flag indicating if the serialization is customized
+            """
+            return True
+
+        def read(self, unmarshaller, ident=0):
+            """
+            Reads extra data using the unmarshaller
+
+            :param unmarshaller: The Java Object Unmarshaller
+            :param ident: Log indentation
+            """
+            (self.size,) = struct.unpack(
+                "<i", self.annotations[0].encode('latin1'))
+            self.extend(self.annotations[1:1+self.size])
 
     class JavaMap(dict, JavaObject):
         """
