@@ -308,6 +308,34 @@ class JavaObject(object):
                 return False
         return True
 
+    @staticmethod
+    def is_custom():
+        """
+        Indicates if the object serialization is customized, in which case,
+        this instance must implement read() and write()
+
+        :return: A flag indicating if the serialization is customized
+        """
+        return False
+
+    def read(self, unmarshaller, ident=0):
+        """
+        Reads extra data using the unmarshaller
+
+        :param unmarshaller: The Java Object Unmarshaller
+        :param ident: Log indentation
+        """
+        raise NotImplementedError
+
+    def write(self, marshaller, ident=0):
+        """
+        Writes extra data using the marshaller
+
+        :param marshaller: The Java Object Marshaller
+        :param ident: Log indentation
+        """
+        raise NotImplementedError
+
 
 class JavaString(str):
     """
@@ -518,7 +546,7 @@ class JavaObjectUnmarshaller(JavaObjectConstants):
         self.current_object = None
         self.reference_counter = 0
         self.references = []
-        self.object_transformers = []
+        self.object_transformers = [DefaultObjectTransformer()]
         self.object_stream = stream
 
         # Read the stream header (magic & version)
@@ -885,6 +913,11 @@ class JavaObjectUnmarshaller(JavaObjectConstants):
 
             log_debug("java_object.annotations after: {0}"
                       .format(java_object.annotations), ident)
+
+        if java_object.is_custom():
+            log_debug("Custom JavaObject handling", ident)
+            java_object.read(self, ident)
+            log_debug("End of JavaObject.read()", ident)
 
         log_debug(">>> java_object: {0}".format(java_object), ident)
         return java_object
@@ -1578,6 +1611,49 @@ class DefaultObjectTransformer(object):
         def __init__(self, *args, **kwargs):
             dict.__init__(self, *args, **kwargs)
             JavaObject.__init__(self)
+            self.buckets = None
+            self.size = None
+
+        @staticmethod
+        def is_custom():
+            """
+            Indicates if the object serialization is customized, in which case,
+            this instance must implement read() and write()
+
+            :return: A flag indicating if the serialization is customized
+            """
+            return True
+
+        def read(self, unmarshaller, ident=0):
+            """
+            Reads extra data using the unmarshaller
+
+            :param unmarshaller: The Java Object Unmarshaller
+            :param ident: Log indentation
+            """
+            # FIXME: this should be handled more carefully
+            # Read the separator (seems to be 0x08)
+            _ = unmarshaller._readStruct(">b")
+
+            # Read the capacity (buckets) and size of the map
+            self.buckets, self.size = unmarshaller._readStruct(">ii")
+
+            log_debug("HashMap buckets={} size={}".format(
+                self.buckets, self.size), ident)
+
+            for idx in range(self.size):
+                log_debug("Reading map object {}".format(idx), ident + 1)
+
+                # Ignore expected remaining data
+                key = unmarshaller.readObject(True)
+                value = unmarshaller.readObject(True)
+
+                # Store the pair
+                self[key] = value
+
+            # We should have an end of block data here
+            unmarshaller._read_and_exec_opcode(
+                ident, expect=[JavaObjectUnmarshaller.TC_ENDBLOCKDATA])
 
     TYPE_MAPPER = {
         "java.util.ArrayList": JavaList,
@@ -1598,13 +1674,11 @@ class DefaultObjectTransformer(object):
             mapped_type = self.TYPE_MAPPER[classdesc.name]
         except KeyError:
             # Return a JavaObject by default
+            log_debug("Not a known mapped type: {}".format(classdesc.name))
             return JavaObject()
         else:
-            log_debug("---")
-            log_debug(classdesc.name)
-            log_debug("---")
+            log_debug("MAPPED TYPE {} => {}".format(classdesc.name, mapped_type.__name__))
 
             java_object = mapped_type()
-
             log_debug(">>> java_object: {0}".format(java_object))
             return java_object
